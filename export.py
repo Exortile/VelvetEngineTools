@@ -57,6 +57,8 @@ class Mesh:
         color_layer = self.bpy_mesh.vertex_colors.active.data if self.has_colors else None
 
         for p in self.bpy_mesh.polygons:
+            vertices = []
+
             for li in range(p.loop_start, p.loop_start + p.loop_total):
                 vertex = []
 
@@ -89,7 +91,11 @@ class Mesh:
 
                     vertex.append(uv_idx)
 
-                self.indices.append(vertex)
+                vertices.append(vertex)
+
+            vertices[0], vertices[1] = vertices[1], vertices[0]  # swapped for proper culling order
+            for v in vertices:
+                self.indices.append(v)
 
     def setup(self):
         self.calc_vertex_format()
