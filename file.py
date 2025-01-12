@@ -1,5 +1,6 @@
-from typing import BinaryIO
 from struct import pack
+from typing import BinaryIO
+
 from .structures import *
 from .util import *
 
@@ -54,7 +55,7 @@ class VelvetFileWriter(BigEndianFileWriter):
         header = VHeader(header_id_bytes)
         self._file.write(header)
 
-    def write_section(self, header_id: str, data) -> int:
+    def write_section(self, header_id: str, *data) -> int:
         """
         Writes a section to the file with the given ID and data.
         Returns the absolute offset to the start of the written data (header excluded).
@@ -63,12 +64,16 @@ class VelvetFileWriter(BigEndianFileWriter):
         start_offset = self._file.tell()
         header_id_bytes = bytes(header_id.upper(), "ascii")
 
-        data_len = align(len(data), 16)
+        unaligned_data_len = sum([len(d) for d in data])
+        data_len = align(unaligned_data_len, 16)
         next_offset = sizeof(VHeader) + data_len
         header = VHeader(header_id_bytes, start_offset + next_offset)
 
         self._file.write(header)
-        self._file.write(data)
+
+        for d in data:
+            self._file.write(d)
+
         self.align()
 
         return start_offset + sizeof(VHeader)

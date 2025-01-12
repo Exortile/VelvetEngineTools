@@ -1,4 +1,5 @@
 from ctypes import BigEndianStructure, c_uint32, c_uint8, c_char, sizeof, c_float
+from ctypes import c_uint8 as c_bool  # big endian doesn't support c_bool lol
 from enum import Enum
 
 
@@ -86,13 +87,19 @@ class VVertexData(BigEndianStructureExt):
 
 class VMaterials(BigEndianStructureExt):
     id = "VMAT"
-    data_version = 1
+    data_version = 2
 
     _fields_ = [
         ("version", c_uint32),
 
+        # material flags
+        ("disable_backface_culling", c_bool, 1),
+        ("disable_specular_lighting", c_bool, 1),
+        ("disable_lighting", c_bool, 1),
+
         ("diffuse_color", c_uint8 * 3),
         ("specular_color", c_uint8 * 3),
+        ("has_texture", c_bool),
 
         ("shininess", c_float),
     ]

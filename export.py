@@ -1,10 +1,30 @@
-import bpy
 from dataclasses import dataclass, field
-from .structures import *
-from .file import VelvetFileWriter
-from .util import read_struct
+
+import bpy
+
 from .exceptions import VException
+from .file import VelvetFileWriter
 from .gx import *
+from .structures import *
+from .util import read_struct
+
+
+def check_node_id(node, identifier):
+    return node.bl_idname == "ShaderNode" + identifier
+
+
+def convert_color_to_rgba(color):
+    return int(color[0] * 255), int(color[1] * 255), int(color[2] * 255)
+
+
+@dataclass
+class Material:
+    flags: list[bool] = field(default_factory=list)
+    diffuse_color: tuple = (200, 200, 200)
+    specular_color: tuple = (255, 255, 255)
+    shininess: float = 64.0
+    has_texture: bool = False
+    texture_name: str = ""
 
 
 @dataclass
@@ -24,6 +44,8 @@ class Mesh:
     has_uvs: bool = False
     has_colors: bool = False
     vformat: list[VVFormatType] = field(default_factory=list)
+
+    material: Material = field(default_factory=Material)
 
     display_list_offset: int = 0
     display_list_size: int = 0
@@ -97,10 +119,54 @@ class Mesh:
             for v in vertices:
                 self.indices.append(v)
 
+    def calc_material(self):
+        if len(self.bpy_mesh.materials) > 1:
+            raise VException("You can only have one material assigned to a mesh!")
+
+        bpy_material = self.bpy_mesh.materials[0]
+
+        # get material flags
+        self.material.flags.append(bpy_material.vobj_props.disable_backface_culling)
+        self.material.flags.append(bpy_material.vobj_props.disable_specular_lighting)
+        self.material.flags.append(bpy_material.vobj_props.disable_lighting)
+
+        nodes = bpy_material.node_tree.nodes
+        material_output = None
+
+        for n in nodes:
+            if check_node_id(n, "OutputMaterial"):
+                material_output = n
+                break
+
+        if material_output is None:
+            raise VException("Couldn't find material output node in material!")
+
+        shader_input = material_output.inputs[0]
+        if not shader_input.is_linked:
+            raise VException("Material output node doesn't have have an input shader!")
+
+        shader = shader_input.links[0].from_node
+        if not check_node_id(shader, "BsdfPrincipled"):
+            raise VException("Only Principled BSDF shaders allowed.")
+
+        base_color_input = shader.inputs[0]
+        self.material.diffuse_color = convert_color_to_rgba(base_color_input.default_value)
+        if base_color_input.is_linked and check_node_id(base_color_input.links[0].from_node, "TexImage"):
+            self.material.has_texture = True
+            self.material.texture_name = base_color_input.links[0].from_node.image.name
+
+        specular_color_input = shader.inputs[13]
+        if not specular_color_input.is_linked:
+            self.material.specular_color = convert_color_to_rgba(specular_color_input.default_value)
+        elif check_node_id(specular_color_input.links[0].from_node, "RGB"):
+            self.material.specular_color = convert_color_to_rgba(
+                specular_color_input.links[0].from_node.outputs[0].default_value)
+
     def setup(self):
         self.calc_vertex_format()
         self.calc_draw_format()
         self.calc_vertices()
+        self.calc_material()
 
     def write_display_list(self, file: VelvetFileWriter):
         file.align(32)
@@ -157,15 +223,27 @@ def export_vobj(**keywords):
     with VelvetFileWriter(open(keywords["filepath"], "wb")) as file:
         file.write_section(VInfo.id, VInfo(VInfo.data_version, *VInfo.make_file_type(VFileType.Model)))
 
+        # object info
         vobj = VObject(VObject.data_version, *VObject.make_vformat(mesh.vformat))
         vobj_offset = file.write_section(VObject.id, vobj)
 
-        vmat = VMaterials(VMaterials.data_version, (200, 200, 200), (255, 255, 255), 64.0)
-        vmat_offset = file.write_section(VMaterials.id, vmat)
+        # material
+        vmat = VMaterials(VMaterials.data_version, *mesh.material.flags, mesh.material.diffuse_color,
+                          mesh.material.specular_color,
+                          mesh.material.has_texture, 64.0)
 
+        if mesh.material.has_texture:
+            vmat_data = (vmat, bytes(mesh.material.texture_name, "ascii") + b'\x00')  # 0x00 for string terminator
+        else:
+            vmat_data = vmat
+
+        vmat_offset = file.write_section(VMaterials.id, *vmat_data)
+
+        # vertex data
         vvtx = VVertexData(VVertexData.data_version)
         vvtx_offset = file.write_section(VVertexData.id, vvtx)
 
+        # data
         vdat_header_offset = file.tell()
         file.write_header_only("VDAT")
 
